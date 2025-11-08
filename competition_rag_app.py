@@ -1,22 +1,14 @@
-import os
-os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
-
-import sys, types, importlib
-
+import sys, types, os
+os.environ.setdefault("STREAMLIT_SERVER_ENABLE_FILE_WATCHER", "false")
+if "torch.classes" not in sys.modules:
+    shim = types.ModuleType("torch.classes"); shim.__path__ = []; sys.modules["torch.classes"] = shim
 try:
-    import streamlit as st
-    import torch
-except Exception as e:
-    msg = str(e)
-    if "Tried to instantiate class '__path__._path'" in msg or "torch.classes" in msg:
-        # install a shim module and retry
-        shim = types.ModuleType('torch.classes')
-        shim.__path__ = []
-        sys.modules['torch.classes'] = shim
-        # retry torch import
-        torch = importlib.import_module('torch')
-    else:
-        raise
+    if "torch" in sys.modules:
+        _t = sys.modules["torch"]
+        if not hasattr(_t, "classes") or _t.classes is None:
+            _tc = types.ModuleType("torch.classes"); _tc.__path__ = []; _t.classes = _tc
+except Exception:
+    pass
 
 
 import streamlit as st

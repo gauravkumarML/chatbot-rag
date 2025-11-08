@@ -274,7 +274,7 @@ def main():
                     with st.spinner("Processing documents..."):
                         # Initialize vector DB
                         db_client = get_vector_db()
-                        collection = db_client.create_collection(
+                        collection = db_client.get_or_create_collection(
                             name="documents",
                             metadata={"hnsw:space": "cosine"}
                         )

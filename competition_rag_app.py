@@ -1,5 +1,6 @@
 import sys, types, os
 os.environ.setdefault("STREAMLIT_SERVER_ENABLE_FILE_WATCHER", "false")
+os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
 if "torch.classes" not in sys.modules:
     shim = types.ModuleType("torch.classes"); shim.__path__ = []; sys.modules["torch.classes"] = shim
 try:

@@ -1,6 +1,24 @@
 import os
 os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
 
+import sys, types, importlib
+
+try:
+    import streamlit as st
+    import torch
+except Exception as e:
+    msg = str(e)
+    if "Tried to instantiate class '__path__._path'" in msg or "torch.classes" in msg:
+        # install a shim module and retry
+        shim = types.ModuleType('torch.classes')
+        shim.__path__ = []
+        sys.modules['torch.classes'] = shim
+        # retry torch import
+        torch = importlib.import_module('torch')
+    else:
+        raise
+
+
 import streamlit as st
 from groq import Groq
 from sentence_transformers import SentenceTransformer

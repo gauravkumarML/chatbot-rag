@@ -3,7 +3,7 @@ from groq import Groq
 from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.config import Settings
-import pypdf2
+import Pypdf2
 import docx
 import pandas as pd
 import io

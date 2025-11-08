@@ -1,3 +1,6 @@
+import os
+os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
+
 import streamlit as st
 from groq import Groq
 from sentence_transformers import SentenceTransformer
@@ -9,7 +12,7 @@ import pandas as pd
 import io
 import hashlib
 from typing import List, Dict
-import os
+
 
 # Page config
 st.set_page_config(

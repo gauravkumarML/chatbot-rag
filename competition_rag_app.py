@@ -220,7 +220,7 @@ def generate_response(question: str, context: List[Dict], task: str) -> str:
     
     # Generate response
     response = client.chat.completions.create(
-        model="llama-3.2-11b-text-preview",  # Fast and high quality
+        model="llama-3.3-70b-versatile",  # Fast and high quality
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}\n\nAnswer:"}

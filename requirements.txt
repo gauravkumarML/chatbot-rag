@@ -5,3 +5,4 @@ sentence-transformers==2.2.2
 chromadb==0.4.22
 PyPDF2==3.0.1
 python-docx==1
+tornado

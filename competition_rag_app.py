@@ -1,18 +1,4 @@
-import sys, types, os
-os.environ.setdefault("STREAMLIT_SERVER_ENABLE_FILE_WATCHER", "false")
-os.environ["ANONYMIZED_TELEMETRY"] = "FALSE"
-if "torch.classes" not in sys.modules:
-    shim = types.ModuleType("torch.classes"); shim.__path__ = []; sys.modules["torch.classes"] = shim
-try:
-    if "torch" in sys.modules:
-        _t = sys.modules["torch"]
-        if not hasattr(_t, "classes") or _t.classes is None:
-            _tc = types.ModuleType("torch.classes"); _tc.__path__ = []; _t.classes = _tc
-except Exception:
-    pass
-
-
-import streamlit as st
+import gradio as gr
 from groq import Groq
 from sentence_transformers import SentenceTransformer
 import chromadb
@@ -20,125 +6,80 @@ from chromadb.config import Settings
 import PyPDF2
 import docx
 import pandas as pd
-import io
-import hashlib
+import os
 from typing import List, Dict
 
+# Global state
+embedder = None
+db_client = None
+collection = None
+task_id = None
+uploaded_files_info = []
 
-# Page config
-st.set_page_config(
-    page_title="AI Document Assistant",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for professional look
-st.markdown("""
-<style>
-    .main {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);}
-    .stButton>button {
-        width: 100%;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 0.75rem;
-        font-weight: 600;
-        border-radius: 8px;
-    }
-    .chat-message {
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
-        animation: slideIn 0.3s ease-out;
-    }
-    .user-message {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        margin-left: 20%;
-    }
-    .assistant-message {
-        background: rgba(255,255,255,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-    }
-    @keyframes slideIn {
-        from {opacity: 0; transform: translateY(10px);}
-        to {opacity: 1; transform: translateY(0);}
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-if 'step' not in st.session_state:
-    st.session_state.step = 'upload'
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'documents_processed' not in st.session_state:
-    st.session_state.documents_processed = False
-if 'task_selected' not in st.session_state:
-    st.session_state.task_selected = None
-
-# Initialize models (cached for performance)
-@st.cache_resource
+# Initialize models
 def load_embedder():
-    """Load sentence transformer model (runs locally, free)"""
-    return SentenceTransformer('all-MiniLM-L6-v2')
+    """Load sentence transformer model"""
+    global embedder
+    if embedder is None:
+        embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    return embedder
 
-@st.cache_resource
 def get_vector_db():
-    """Initialize ChromaDB (in-memory for demo)"""
-    client = chromadb.Client(Settings(anonymized_telemetry=False))
-    return client
+    """Initialize ChromaDB"""
+    global db_client
+    if db_client is None:
+        db_client = chromadb.Client(Settings(anonymized_telemetry=False))
+    return db_client
 
 def get_groq_client():
     """Initialize Groq client with API key"""
-    api_key = os.getenv('GROQ_API_KEY', st.secrets.get('GROQ_API_KEY', ''))
+    api_key = os.getenv('GROQ_API_KEY', '')
     if not api_key:
-        st.error("⚠️ GROQ_API_KEY not found! Add it to Streamlit secrets.")
-        st.stop()
+        raise ValueError(" GROQ_API_KEY not found! Set it as an environment variable.")
     return Groq(api_key=api_key)
 
-# Document processing functions
-def extract_text_from_pdf(file) -> str:
+# Document processing
+def extract_text_from_pdf(file_path: str) -> str:
     """Extract text from PDF file"""
-    reader = pypdf2.PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() + "\n"
+    with open(file_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
     return text
 
-def extract_text_from_docx(file) -> str:
+def extract_text_from_docx(file_path: str) -> str:
     """Extract text from DOCX file"""
-    doc = docx.Document(file)
+    doc = docx.Document(file_path)
     return "\n".join([para.text for para in doc.paragraphs])
 
-def extract_text_from_txt(file) -> str:
+def extract_text_from_txt(file_path: str) -> str:
     """Extract text from TXT file"""
-    return file.read().decode('utf-8')
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read()
 
-def extract_text_from_csv(file) -> str:
+def extract_text_from_csv(file_path: str) -> str:
     """Extract text from CSV file"""
-    df = pd.read_csv(file)
+    df = pd.read_csv(file_path)
     return df.to_string()
 
-def process_document(file) -> str:
+def process_document(file_path: str) -> str:
     """Process uploaded file and extract text"""
-    file_type = file.name.split('.')[-1].lower()
+    file_type = file_path.split('.')[-1].lower()
     
     try:
         if file_type == 'pdf':
-            return extract_text_from_pdf(file)
+            return extract_text_from_pdf(file_path)
         elif file_type == 'docx':
-            return extract_text_from_docx(file)
+            return extract_text_from_docx(file_path)
         elif file_type == 'txt':
-            return extract_text_from_txt(file)
+            return extract_text_from_txt(file_path)
         elif file_type == 'csv':
-            return extract_text_from_csv(file)
+            return extract_text_from_csv(file_path)
         else:
             return ""
     except Exception as e:
-        st.error(f"Error processing {file.name}: {str(e)}")
-        return ""
+        return f"Error processing file: {str(e)}"
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
     """Split text into overlapping chunks"""
@@ -158,14 +99,9 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
 def add_to_vector_db(chunks: List[str], file_name: str, collection):
     """Add document chunks to vector database"""
     embedder = load_embedder()
-    
-    # Generate embeddings
     embeddings = embedder.encode(chunks).tolist()
-    
-    # Create unique IDs
     ids = [f"{file_name}_{i}" for i in range(len(chunks))]
     
-    # Add to collection
     collection.add(
         embeddings=embeddings,
         documents=chunks,
@@ -196,13 +132,11 @@ def generate_response(question: str, context: List[Dict], task: str) -> str:
     """Generate response using Groq API"""
     client = get_groq_client()
     
-    # Build context string
     context_text = "\n\n".join([
         f"[Source: {doc['source']}]\n{doc['text']}" 
         for doc in context
     ])
     
-    # Task-specific system prompts
     system_prompts = {
         "qa": "You are a helpful assistant that answers questions based on provided documents. Be concise and cite sources.",
         "research": "You are a research assistant that provides comprehensive analysis. Give detailed insights and connect ideas across sources.",
@@ -211,9 +145,8 @@ def generate_response(question: str, context: List[Dict], task: str) -> str:
     
     system_prompt = system_prompts.get(task, system_prompts["qa"])
     
-    # Generate response
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",  # Fast and high quality
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}\n\nAnswer:"}
@@ -224,156 +157,217 @@ def generate_response(question: str, context: List[Dict], task: str) -> str:
     
     return response.choices[0].message.content
 
-# Main app
-def main():
-    # Header
-    st.markdown("<h1 style='text-align: center; color: white;'>🧠 AI Document Assistant</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: rgba(255,255,255,0.7);'>Intelligent RAG-powered chatbot for your documents</p>", unsafe_allow_html=True)
-    st.markdown("---")
+# Gradio interface functions
+def process_documents(files):
+    """Process uploaded documents and return status"""
+    global collection, uploaded_files_info
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown("### 📊 Session Info")
-        
-        if st.session_state.documents_processed:
-            st.success(f"✅ {len(st.session_state.uploaded_files)} document(s) loaded")
-            if st.session_state.task_selected:
-                st.info(f"🎯 Task: **{st.session_state.task_selected}**")
-        
-        st.markdown("---")
-        st.markdown("### 🚀 Features")
-        st.markdown("- Multi-format support (PDF, DOCX, CSV, TXT)")
-        st.markdown("- Task-specific responses")
-        st.markdown("- Source citations")
-        st.markdown("- Fast retrieval (Groq API)")
-        
-        st.markdown("---")
-        if st.button("🔄 New Session"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+    if not files:
+        return "Please upload at least one document.", gr.update(visible=False), gr.update(visible=False), "No documents loaded yet."
     
-    # Step 1: Upload Documents
-    if st.session_state.step == 'upload':
-        col1, col2, col3 = st.columns([1,2,1])
+    try:
+        db_client = get_vector_db()
         
-        with col2:
-            st.markdown("### 📤 Upload Your Documents")
-            uploaded_files = st.file_uploader(
-                "Choose files",
-                type=['pdf', 'docx', 'txt', 'csv'],
-                accept_multiple_files=True,
-                label_visibility="collapsed"
+        # Try to create collection, delete if it already exists
+        try:
+            collection = db_client.create_collection(
+                name="documents",
+                metadata={"hnsw:space": "cosine"}
             )
-            
-            if uploaded_files:
-                st.success(f"✅ {len(uploaded_files)} file(s) selected")
-                for file in uploaded_files:
-                    st.text(f"📄 {file.name} ({file.size/1024:.1f} KB)")
-                
-                if st.button("🚀 Process Documents", type="primary"):
-                    with st.spinner("Processing documents..."):
-                        # Initialize vector DB
-                        db_client = get_vector_db()
-                        collection = db_client.get_or_create_collection(
-                            name="documents",
-                            metadata={"hnsw:space": "cosine"}
-                        )
-                        
-                        # Process each file
-                        progress_bar = st.progress(0)
-                        for idx, file in enumerate(uploaded_files):
-                            text = process_document(file)
-                            if text:
-                                chunks = chunk_text(text)
-                                add_to_vector_db(chunks, file.name, collection)
-                            progress_bar.progress((idx + 1) / len(uploaded_files))
-                        
-                        st.session_state.collection = collection
-                        st.session_state.uploaded_files = uploaded_files
-                        st.session_state.documents_processed = True
-                        st.session_state.step = 'task'
-                        st.rerun()
-    
-    # Step 2: Select Task
-    elif st.session_state.step == 'task':
-        st.markdown("### 🎯 Choose Your Task")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("💬 Quick Q&A\n\nFast answers to specific questions", use_container_width=True):
-                st.session_state.task_selected = "Quick Q&A"
-                st.session_state.task_id = "qa"
-                st.session_state.step = 'chat'
-                st.session_state.messages = [
-                    {"role": "assistant", "content": f"I've analyzed your {len(st.session_state.uploaded_files)} document(s). Ask me anything!"}
-                ]
-                st.rerun()
-        
-        with col2:
-            if st.button("🧠 Deep Research\n\nComprehensive analysis & insights", use_container_width=True):
-                st.session_state.task_selected = "Deep Research"
-                st.session_state.task_id = "research"
-                st.session_state.step = 'chat'
-                st.session_state.messages = [
-                    {"role": "assistant", "content": "Ready for deep research! I'll provide comprehensive analysis with connections across your documents."}
-                ]
-                st.rerun()
-        
-        with col3:
-            if st.button("📊 Data Analysis\n\nExtract & analyze structured data", use_container_width=True):
-                st.session_state.task_selected = "Data Analysis"
-                st.session_state.task_id = "analysis"
-                st.session_state.step = 'chat'
-                st.session_state.messages = [
-                    {"role": "assistant", "content": "I'll help you analyze data from your documents. What metrics or patterns are you interested in?"}
-                ]
-                st.rerun()
-    
-    # Step 3: Chat Interface
-    elif st.session_state.step == 'chat':
-        # Display chat messages
-        for message in st.session_state.messages:
-            css_class = "user-message" if message["role"] == "user" else "assistant-message"
-            st.markdown(f'<div class="chat-message {css_class}">{message["content"]}</div>', unsafe_allow_html=True)
-            
-            # Show sources if available
-            if "sources" in message:
-                with st.expander("📚 View Sources"):
-                    for source in message["sources"]:
-                        st.text(f"• {source['source']} (Chunk {source['chunk_id']})")
-        
-        # Chat input
-        user_input = st.chat_input("Ask a question about your documents...")
-        
-        if user_input:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            
-            with st.spinner("Thinking..."):
-                # Query vector DB
-                relevant_docs = query_documents(
-                    user_input, 
-                    st.session_state.collection,
-                    top_k=5 if st.session_state.task_id == "research" else 3
+        except Exception as e:
+            # If collection exists, delete it and create a new one
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                try:
+                    db_client.delete_collection(name="documents")
+                except Exception:
+                    pass
+                # Create new collection after deletion
+                collection = db_client.create_collection(
+                    name="documents",
+                    metadata={"hnsw:space": "cosine"}
                 )
-                
-                # Generate response
-                response = generate_response(
-                    user_input,
-                    relevant_docs,
-                    st.session_state.task_id
-                )
-                
-                # Add assistant message
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": response,
-                    "sources": relevant_docs
-                })
+            else:
+                raise  # Re-raise if it's a different error
+        
+        uploaded_files_info = []
+        for file in files:
+            file_path = file.name
+            file_name = os.path.basename(file_path)
+            text = process_document(file_path)
             
-            st.rerun()
+            if text and not text.startswith("Error"):
+                chunks = chunk_text(text)
+                add_to_vector_db(chunks, file_name, collection)
+                uploaded_files_info.append(file_name)
+        
+        if uploaded_files_info:
+            status_msg = f"Successfully processed {len(uploaded_files_info)} document(s):\n"
+            status_msg += "\n".join([f"  • {fname}" for fname in uploaded_files_info])
+            status_msg += "\n\nSelect a task to continue."
+            session_msg = f"{len(uploaded_files_info)} document(s) loaded"
+            return status_msg, gr.update(visible=True), gr.update(visible=False), session_msg
+        else:
+            return "Error processing documents. Please try again.", gr.update(visible=False), gr.update(visible=False), "No documents loaded yet."
+    except Exception as e:
+        return f"Error: {str(e)}", gr.update(visible=False), gr.update(visible=False), "No documents loaded yet."
+
+def select_task(task_type: str, current_task, session_info_text):
+    """Handle task selection"""
+    global task_id
+    
+    task_config = {
+        "qa": {
+            "id": "qa",
+            "name": "Quick Q&A",
+            "welcome": f"I've analyzed your {len(uploaded_files_info)} document(s). Ask me anything!"
+        },
+        "research": {
+            "id": "research",
+            "name": "Deep Research",
+            "welcome": "Ready for deep research! I'll provide comprehensive analysis with connections across your documents."
+        },
+        "analysis": {
+            "id": "analysis",
+            "name": "Data Analysis",
+            "welcome": "I'll help you analyze data from your documents. What metrics or patterns are you interested in?"
+        }
+    }
+    
+    config = task_config.get(task_type, task_config["qa"])
+    task_id = config["id"]
+    chat_history = [[None, config["welcome"]]]
+    new_session_info = f" {len(uploaded_files_info)} document(s) loaded\nTask: **{config['name']}**"
+    
+    return gr.update(visible=True), gr.update(visible=True), chat_history, config["name"], config["name"], new_session_info
+
+def chat_respond(message, history, current_task):
+    """Handle chat messages"""
+    global collection, task_id
+    
+    if not message or not collection:
+        return history, current_task
+    
+    history.append([message, None])
+    
+    try:
+        top_k = 5 if task_id == "research" else 3
+        relevant_docs = query_documents(message, collection, top_k=top_k)
+        response = generate_response(message, relevant_docs, task_id)
+        
+        sources_text = "\n\nSources:\n" + "\n".join([f"• {doc['source']} (Chunk {doc['chunk_id']})" for doc in relevant_docs])
+        history[-1][1] = response + sources_text
+    except Exception as e:
+        history[-1][1] = f"Error: {str(e)}"
+    
+    return history, current_task
+
+def reset_session(current_task, session_info_text):
+    """Reset the session"""
+    global collection, uploaded_files_info, task_id
+    collection = None
+    uploaded_files_info = []
+    task_id = None
+    return (
+        gr.update(value=None),
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(visible=False),
+        [],
+        None,
+        None,
+        "No documents loaded yet."
+    )
+
+# Gradio Interface
+with gr.Blocks(theme=gr.themes.Soft(), title="AI Document Assistant") as app:
+    gr.Markdown("# AI Document Assistant\n### Intelligent RAG-powered chatbot for your documents")
+    
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("### Session Info")
+            session_info = gr.Markdown("No documents loaded yet.")
+            gr.Markdown("---")
+            gr.Markdown("### Features")
+            gr.Markdown("- Multi-format support (PDF, DOCX, CSV, TXT)\n- Task-specific responses\n- Source citations\n- Fast retrieval")
+            gr.Markdown("---")
+            reset_btn = gr.Button("New Session", variant="secondary")
+        
+        with gr.Column(scale=3):
+            with gr.Group(visible=True) as upload_section:
+                gr.Markdown("### Upload Your Documents")
+                file_upload = gr.File(file_count="multiple", file_types=[".pdf", ".docx", ".txt", ".csv"], label="Choose files")
+                process_btn = gr.Button("Process Documents", variant="primary")
+                upload_status = gr.Markdown()
+            
+            with gr.Group(visible=False) as task_section:
+                gr.Markdown("### Choose Your Task")
+                with gr.Row():
+                    task_qa = gr.Button("Quick Q&A\n\nFast answers to specific questions", scale=1)
+                    task_research = gr.Button("Deep Research\n\nComprehensive analysis & insights", scale=1)
+                    task_analysis = gr.Button("Data Analysis\n\nExtract & analyze structured data", scale=1)
+            
+            with gr.Group(visible=False) as chat_section:
+                gr.Markdown("### Chat with Your Documents")
+                chatbot = gr.Chatbot(label="Conversation", height=500, show_copy_button=True)
+                task_display = gr.Markdown(visible=False)
+                with gr.Row():
+                    msg = gr.Textbox(label="Ask a question about your documents...", placeholder="Type your question here...", scale=4)
+                    submit_btn = gr.Button("Send", variant="primary", scale=1)
+    
+    current_task_state = gr.State(value=None)
+    
+    # Event handlers
+    process_btn.click(
+        fn=process_documents,
+        inputs=[file_upload],
+        outputs=[upload_status, task_section, chat_section, session_info]
+    )
+    
+    def select_qa(ct, si):
+        return select_task("qa", ct, si)
+    
+    def select_research(ct, si):
+        return select_task("research", ct, si)
+    
+    def select_analysis(ct, si):
+        return select_task("analysis", ct, si)
+    
+    task_qa.click(
+        fn=select_qa,
+        inputs=[current_task_state, session_info],
+        outputs=[task_section, chat_section, chatbot, task_display, current_task_state, session_info]
+    )
+    
+    task_research.click(
+        fn=select_research,
+        inputs=[current_task_state, session_info],
+        outputs=[task_section, chat_section, chatbot, task_display, current_task_state, session_info]
+    )
+    
+    task_analysis.click(
+        fn=select_analysis,
+        inputs=[current_task_state, session_info],
+        outputs=[task_section, chat_section, chatbot, task_display, current_task_state, session_info]
+    )
+    
+    submit_btn.click(
+        fn=chat_respond,
+        inputs=[msg, chatbot, current_task_state],
+        outputs=[chatbot, current_task_state]
+    ).then(fn=lambda: "", outputs=[msg])
+    
+    msg.submit(
+        fn=chat_respond,
+        inputs=[msg, chatbot, current_task_state],
+        outputs=[chatbot, current_task_state]
+    ).then(fn=lambda: "", outputs=[msg])
+    
+    reset_btn.click(
+        fn=reset_session,
+        inputs=[current_task_state, session_info],
+        outputs=[file_upload, upload_section, task_section, chat_section, chatbot, task_display, current_task_state, session_info]
+    ).then(fn=lambda: "", outputs=[upload_status])
 
 if __name__ == "__main__":
-    main()
+    app.launch()
+

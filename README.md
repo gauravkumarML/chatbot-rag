@@ -14,4 +14,4 @@ assemble retrieved context + prompt for the LLM,
 
 generate final answers.
 
-[Demo Screengrab] (assets/demo.png)
+![Demo Screengrab] (assets/demo.png)
